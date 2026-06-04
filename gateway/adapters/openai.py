@@ -1,0 +1,154 @@
+"""OpenAI-compatible adapter using httpx."""
+
+from __future__ import annotations
+
+import json
+import time
+from typing import Any, AsyncIterator
+
+import httpx
+
+from gateway.adapters.base import BaseAdapter, ChatResponse, ModelCapabilities
+from gateway.core.exceptions import ProviderError
+from gateway.config.settings import get_settings
+
+
+class OpenAIAdapter(BaseAdapter):
+    """Adapter for OpenAI-compatible APIs (OpenAI, Azure, local proxies)."""
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
+        **kwargs: Any,
+    ):
+        settings = get_settings()
+        super().__init__(
+            api_key=api_key or settings.openai_api_key or "",
+            model=model or settings.openai_model,
+        )
+        self.base_url = (base_url or settings.openai_base_url).rstrip("/")
+        self._client: httpx.AsyncClient | None = None
+
+    @property
+    def provider_name(self) -> str:
+        return "openai"
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                base_url=self.base_url,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=httpx.Timeout(60.0, connect=10.0),
+            )
+        return self._client
+
+    async def chat_completions(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> ChatResponse:
+        client = self._get_client()
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "stream": stream,
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+
+        start = time.perf_counter()
+        try:
+            response = await client.post("/chat/completions", json=payload)
+            response.raise_for_status()
+            data = response.json()
+        except httpx.HTTPStatusError as e:
+            raise ProviderError(self.provider_name, str(e)) from e
+        except httpx.RequestError as e:
+            raise ProviderError(self.provider_name, f"Request failed: {e}") from e
+
+        latency_ms = (time.perf_counter() - start) * 1000
+
+        if stream:
+            content = ""
+        else:
+            content = data["choices"][0]["message"]["content"] or ""
+
+        usage = data.get("usage", {})
+        return ChatResponse(
+            content=content,
+            model=data.get("model", self.model),
+            provider=self.provider_name,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+            latency_ms=latency_ms,
+            raw=data,
+        )
+
+    async def chat_completions_stream(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[str]:
+        """Yield streamed response chunks."""
+        client = self._get_client()
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+
+        async with client.stream("POST", "/chat/completions", json=payload) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    chunk = json.loads(data)
+                    content = chunk["choices"][0].get("delta", {}).get("content", "")
+                    if content:
+                        yield content
+
+    async def list_models(self) -> list[Any]:
+        from gateway.api.schemas import ModelInfo
+        client = self._get_client()
+        try:
+            response = await client.get("/models")
+            response.raise_for_status()
+            data = response.json()
+            return [
+                ModelInfo(id=m["id"], owned_by=m.get("owned_by", "openai"))
+                for m in data.get("data", [])
+                if m.get("id") and not m["id"].startswith("ft:")
+            ]
+        except httpx.HTTPStatusError as e:
+            raise ProviderError(self.provider_name, f"list_models failed: {e}") from e
+
+    def get_capabilities(self) -> ModelCapabilities:
+        return ModelCapabilities(
+            model_id=self.model,
+            provider=self.provider_name,
+            supports_streaming=True,
+            supports_function_calling=True,
+            max_tokens=16384,
+            cost_per_1k_input=0.15,
+            cost_per_1k_output=0.60,
+            typical_latency_ms=800,
+            quality_score=0.9,
+        )
