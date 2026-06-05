@@ -1,35 +1,24 @@
-"""Observability plugin — structured logging, metrics, tracing."""
+"""可观测性插件 — 使用统一日志记录 LLM 请求详情"""
 
-from __future__ import annotations
-
-import logging
 import time
 from typing import Any
 
-import structlog
-
-from gateway.api.schemas import ChatCompletionRequest
-from gateway.core.context import RequestContext
 from gateway.plugins.base import Plugin
-
-# Configure structlog
-structlog.configure(
-    processors=[
-        structlog.contextvars.merge_contextvars,
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.JSONRenderer(),
-    ],
-    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
-    context_class=dict,
-    logger_factory=structlog.PrintLoggerFactory(),
+from gateway.core.context import RequestContext
+from gateway.api.schemas import ChatCompletionRequest
+from gateway.logging_shared.config import get_logger
+from gateway.logging_shared.fields import (
+    TRACE_ID, EVENT, LLM_MODEL, LLM_PROVIDER, LLM_LATENCY_MS,
+    LLM_PROMPT_TOKENS, LLM_COMPLETION_TOKENS, LLM_TOTAL_TOKENS,
+    LLM_STREAMING, DURATION_MS, SOURCE_APP, LLM_REQUEST_START,
+    LLM_REQUEST_END, LLM_REQUEST_ERROR, STATUS_CODE,
 )
 
-logger = structlog.get_logger()
+logger = get_logger("llm")
 
 
 class ObservabilityPlugin(Plugin):
-    """Observability plugin — logs, metrics counters."""
+    """可观测性插件 — 记录 LLM 请求的详细信息"""
 
     def __init__(self):
         self._request_count = 0
@@ -42,15 +31,18 @@ class ObservabilityPlugin(Plugin):
     async def pre_request(
         self, ctx: RequestContext, request: ChatCompletionRequest
     ) -> ChatCompletionRequest:
-        ctx.started_at = time.perf_counter()
         self._request_count += 1
         logger.info(
-            "request_start",
-            trace_id=ctx.trace_id,
-            model=request.model,
-            message_count=len(request.messages),
-            source_app=ctx.source_app,
-            total_requests=self._request_count,
+            EVENT,
+            **{
+                EVENT: LLM_REQUEST_START,
+                TRACE_ID: ctx.trace_id,
+                LLM_MODEL: request.model,
+                LLM_STREAMING: request.stream,
+                SOURCE_APP: ctx.source_app or None,
+                "message_count": len(request.messages),
+                "total_requests": self._request_count,
+            },
         )
         return request
 
@@ -58,13 +50,26 @@ class ObservabilityPlugin(Plugin):
         self, ctx: RequestContext, response: dict[str, Any]
     ) -> dict[str, Any]:
         elapsed_ms = round((time.perf_counter() - ctx.started_at) * 1000, 2)
+
+        usage = response.get("usage", {})
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0)
+        total_tokens = usage.get("total_tokens", 0)
+
         logger.info(
-            "request_end",
-            trace_id=ctx.trace_id,
-            model=ctx.model,
-            provider=ctx.provider,
-            elapsed_ms=elapsed_ms,
-            status="success",
+            EVENT,
+            **{
+                EVENT: LLM_REQUEST_END,
+                TRACE_ID: ctx.trace_id,
+                LLM_MODEL: ctx.model,
+                LLM_PROVIDER: ctx.provider,
+                LLM_LATENCY_MS: elapsed_ms,
+                LLM_PROMPT_TOKENS: prompt_tokens,
+                LLM_COMPLETION_TOKENS: completion_tokens,
+                LLM_TOTAL_TOKENS: total_tokens,
+                STATUS_CODE: 200,
+                DURATION_MS: elapsed_ms,
+            },
         )
         return response
 
@@ -72,12 +77,16 @@ class ObservabilityPlugin(Plugin):
         self._error_count += 1
         elapsed_ms = round((time.perf_counter() - ctx.started_at) * 1000, 2)
         logger.error(
-            "request_error",
-            trace_id=ctx.trace_id,
-            model=ctx.model,
-            provider=ctx.provider,
-            elapsed_ms=elapsed_ms,
-            error_type=type(error).__name__,
-            error_message=str(error),
-            total_errors=self._error_count,
+            EVENT,
+            **{
+                EVENT: LLM_REQUEST_ERROR,
+                TRACE_ID: ctx.trace_id,
+                LLM_MODEL: ctx.model,
+                LLM_PROVIDER: ctx.provider,
+                LLM_LATENCY_MS: elapsed_ms,
+                "error_type": type(error).__name__,
+                "error_message": str(error),
+                "total_errors": self._error_count,
+                STATUS_CODE: 500,
+            },
         )

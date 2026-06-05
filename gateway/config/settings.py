@@ -38,6 +38,16 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4o-mini"
 
+    # Zhipu AI（智谱，国内可用）
+    zhipu_api_key: str | None = None
+    zhipu_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
+    zhipu_model: str = "glm-4-flash"
+
+    # Qwen（阿里通义千问，国内可用）
+    qwen_api_key: str | None = None
+    qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    qwen_model: str = "qwen-plus"
+
     # Anthropic
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-3-5-haiku-20241022"
@@ -69,6 +79,10 @@ class Settings(BaseSettings):
     router_w_cost_complex: float = 0.1
     router_w_latency_complex: float = 0.4
     router_w_quality_complex: float = 0.5
+
+    # Logging
+    log_level: str = "INFO"
+    log_json_format: bool = False
 
     @property
     def redis_url(self) -> str:

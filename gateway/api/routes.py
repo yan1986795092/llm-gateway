@@ -33,8 +33,19 @@ from gateway.core.exceptions import (
     RateLimitError,
 )
 from gateway.plugins.base import Plugin
+from gateway.plugins.observability import ObservabilityPlugin
 
 router = APIRouter()
+
+# 模块级单例
+_obs_plugin: ObservabilityPlugin | None = None
+
+
+def _get_obs_plugin() -> ObservabilityPlugin:
+    global _obs_plugin
+    if _obs_plugin is None:
+        _obs_plugin = ObservabilityPlugin()
+    return _obs_plugin
 
 
 def _get_ctx(request: Request) -> RequestContext:
@@ -57,7 +68,7 @@ async def chat_completions(
     adapters = build_adapters()
 
     # Run plugin pre_request chain
-    plugins: list[Plugin] = [rate_limiter, cache]
+    plugins: list[Plugin] = [rate_limiter, cache, _get_obs_plugin()]
     req = request
     for plugin in plugins:
         req = await plugin.pre_request(ctx, req)
@@ -103,6 +114,17 @@ async def chat_completions(
         cb_plugin.record_success(adapter.provider_name)
         router_dep.record_latency(adapter.provider_name, response.latency_ms)
 
+        # 记录日志（ ObservabilityPlugin.post_response）
+        obs = _get_obs_plugin()
+        response_dict = {
+            "usage": {
+                "prompt_tokens": response.prompt_tokens,
+                "completion_tokens": response.completion_tokens,
+                "total_tokens": response.prompt_tokens + response.completion_tokens,
+            },
+        }
+        await obs.post_response(ctx, response_dict)
+
         # Store in cache
         cache_key = f"llm:cache:{req.hash_key()}"
         await cache.store_response(
@@ -144,6 +166,8 @@ async def chat_completions(
         )
     except Exception as e:
         cb_plugin.record_failure(adapter.provider_name)
+        obs = _get_obs_plugin()
+        await obs.on_error(ctx, e)
         raise
 
 
