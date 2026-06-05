@@ -24,7 +24,23 @@ async def lifespan(app: FastAPI):
     )
     logger = get_logger("gateway")
     logger.info("gateway_startup", **({"message": "LLM Gateway 启动"}))
+
+    # 启动 ES 异步日志写入器
+    try:
+        from gateway.logging_shared.es_writer import start_writer as _start_es
+        await _start_es()
+    except Exception:
+        pass
+
     yield
+
+    # 关闭 ES 写入器
+    try:
+        from gateway.logging_shared.es_writer import stop_writer as _stop_es
+        await _stop_es()
+    except Exception:
+        pass
+
     logger = get_logger("gateway")
     logger.info("gateway_shutdown", **({"message": "LLM Gateway 关闭"}))
 
