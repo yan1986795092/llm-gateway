@@ -12,9 +12,10 @@ from .fields import (
 )
 from .config import setup, get_logger
 from .middleware import LoggingMiddleware
+from .unified_writer import UnifiedEsWriter
 
 __all__ = [
-    "setup", "get_logger", "LoggingMiddleware",
+    "setup", "get_logger", "LoggingMiddleware", "UnifiedEsWriter",
     "TRACE_ID", "SPAN_ID", "SERVICE_NAME", "LOG_TIME", "LEVEL", "EVENT",
     "MESSAGE", "DURATION_MS", "STATUS_CODE", "ERROR_TYPE", "ERROR_MESSAGE",
     "LLM_MODEL", "LLM_PROVIDER", "LLM_PROMPT_TOKENS", "LLM_COMPLETION_TOKENS",
