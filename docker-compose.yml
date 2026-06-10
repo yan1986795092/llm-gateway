@@ -1,23 +1,30 @@
 services:
   llm-gateway:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: llm-gateway
     ports:
-      - "8000:8000"
+      - "9010:9010"
+    env_file:
+      - .env
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      APP_HOST: 0.0.0.0
+      APP_PORT: 9010
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ELASTICSEARCH_URL: ${ELASTICSEARCH_URL:-http://elasticsearch:9200}
     depends_on:
       - redis
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    container_name: llm-gateway-redis
     volumes:
       - redis_data:/data
     restart: unless-stopped
