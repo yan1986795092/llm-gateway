@@ -14,13 +14,14 @@ from gateway.config.settings import get_settings
 
 
 class OpenAIAdapter(BaseAdapter):
-    """Adapter for OpenAI-compatible APIs (OpenAI, Azure, local proxies)."""
+    """Adapter for OpenAI-compatible APIs (OpenAI, Zhipu, Qwen, Azure, local proxies)."""
 
     def __init__(
         self,
         api_key: str | None = None,
         model: str | None = None,
         base_url: str | None = None,
+        provider_name: str = "openai",
         **kwargs: Any,
     ):
         settings = get_settings()
@@ -29,11 +30,12 @@ class OpenAIAdapter(BaseAdapter):
             model=model or settings.openai_model,
         )
         self.base_url = (base_url or settings.openai_base_url).rstrip("/")
+        self._provider_name = provider_name
         self._client: httpx.AsyncClient | None = None
 
     @property
     def provider_name(self) -> str:
-        return "openai"
+        return self._provider_name
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -65,6 +67,9 @@ class OpenAIAdapter(BaseAdapter):
             payload["temperature"] = temperature
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        for key, value in kwargs.items():
+            if value is not None:
+                payload[key] = value
 
         start = time.perf_counter()
         try:
@@ -112,6 +117,9 @@ class OpenAIAdapter(BaseAdapter):
             payload["temperature"] = temperature
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        for key, value in kwargs.items():
+            if value is not None:
+                payload[key] = value
 
         async with client.stream("POST", "/chat/completions", json=payload) as response:
             response.raise_for_status()
@@ -133,7 +141,7 @@ class OpenAIAdapter(BaseAdapter):
             response.raise_for_status()
             data = response.json()
             return [
-                ModelInfo(id=m["id"], owned_by=m.get("owned_by", "openai"))
+                ModelInfo(id=m["id"], owned_by=m.get("owned_by", self.provider_name))
                 for m in data.get("data", [])
                 if m.get("id") and not m["id"].startswith("ft:")
             ]
@@ -141,14 +149,52 @@ class OpenAIAdapter(BaseAdapter):
             raise ProviderError(self.provider_name, f"list_models failed: {e}") from e
 
     def get_capabilities(self) -> ModelCapabilities:
+        caps = _PROVIDER_CAPS.get(self._provider_name, _PROVIDER_CAPS["openai"])
         return ModelCapabilities(
             model_id=self.model,
             provider=self.provider_name,
             supports_streaming=True,
-            supports_function_calling=True,
-            max_tokens=16384,
-            cost_per_1k_input=0.15,
-            cost_per_1k_output=0.60,
-            typical_latency_ms=800,
-            quality_score=0.9,
+            supports_function_calling=caps["supports_function_calling"],
+            max_tokens=caps["max_tokens"],
+            cost_per_1k_input=caps["cost_per_1k_input"],
+            cost_per_1k_output=caps["cost_per_1k_output"],
+            typical_latency_ms=caps["typical_latency_ms"],
+            quality_score=caps["quality_score"],
         )
+
+
+# Per-provider model capabilities
+_PROVIDER_CAPS: dict[str, dict[str, Any]] = {
+    "zhipu": {
+        "supports_function_calling": True,
+        "max_tokens": 8192,
+        "cost_per_1k_input": 0.01,
+        "cost_per_1k_output": 0.01,
+        "typical_latency_ms": 1200,
+        "quality_score": 0.75,
+    },
+    "qwen": {
+        "supports_function_calling": True,
+        "max_tokens": 8192,
+        "cost_per_1k_input": 0.02,
+        "cost_per_1k_output": 0.06,
+        "typical_latency_ms": 1000,
+        "quality_score": 0.8,
+    },
+    "openai": {
+        "supports_function_calling": True,
+        "max_tokens": 16384,
+        "cost_per_1k_input": 0.15,
+        "cost_per_1k_output": 0.60,
+        "typical_latency_ms": 800,
+        "quality_score": 0.9,
+    },
+    "deepseek": {
+        "supports_function_calling": True,
+        "max_tokens": 8192,
+        "cost_per_1k_input": 0.014,
+        "cost_per_1k_output": 0.028,
+        "typical_latency_ms": 900,
+        "quality_score": 0.82,
+    },
+}

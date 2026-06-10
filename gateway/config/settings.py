@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     # App
     app_name: str = "llm-gateway"
     app_host: str = "0.0.0.0"
-    app_port: int = 8000
+    app_port: int = 9010
     debug: bool = False
 
     # Redis
@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     qwen_api_key: str | None = None
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     qwen_model: str = "qwen-plus"
+
+    # DeepSeek（OpenAI 协议兼容）
+    deepseek_api_key: str | None = None
+    deepseek_base_url: str = "https://api.deepseek.com/v1"
+    deepseek_model: str = "deepseek-chat"
 
     # Anthropic
     anthropic_api_key: str | None = None

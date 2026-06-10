@@ -1,40 +1,52 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+*.manifest
+*.spec
+pip-wheel-metadata/
 
-# Virtual environments
+# Virtual Environment
 .venv/
 venv/
 ENV/
 env/
+.env
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+.DS_Store
 
-# Distribution / packaging
-dist/
-build/
-*.egg-info/
+# Database
+*.db
+*.sqlite
+*.sqlite3
 
-# Test coverage
-htmlcov/
-.coverage
-.coverage.*
+# Logs
+logs/
+*.log
+
+# Testing
 .pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Jupyter
+.ipynb_checkpoints/
 
 # Environment
 .env
 .env.local
 
-# Logs
-*.log
-logs/
-
 # OS
-.DS_Store
 Thumbs.db
+Desktop.ini

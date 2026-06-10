@@ -110,11 +110,34 @@ class AutoRouter:
             + weights.w_quality * quality
         )
 
+    _HINT_TO_TASK_TYPE = {
+        "planning": "complex",
+        "creative": "complex",
+        "analysis": "complex",
+        "code": "complex",
+        "simple": "simple",
+        "balanced": "balanced",
+    }
+
     def select(
-        self, messages: list[dict[str, str]], exclude_providers: set[str] | None = None
+        self,
+        messages: list[dict[str, str]],
+        exclude_providers: set[str] | None = None,
+        hint: str = "",
     ) -> ModelScore:
-        """Select the best adapter for the given request."""
-        task_type = self._detect_task_type(messages)
+        """Select the best adapter for the given request.
+
+        Args:
+            messages: Chat messages to analyze.
+            exclude_providers: Set of provider names to exclude.
+            hint: Optional route hint from X-Route-Hint header.
+                  Overrides task_type auto-detection.
+                  Values: planning, creative, analysis, code, simple, balanced.
+        """
+        task_type = self._HINT_TO_TASK_TYPE.get(hint, "")
+        if not task_type:
+            task_type = self._detect_task_type(messages)
+
         candidates = [
             (adapter, adapter.get_capabilities())
             for adapter in self._adapters

@@ -27,7 +27,7 @@ cp .env.example .env
 # Edit .env with your API keys
 
 pip install -e ".[dev]"
-uvicorn gateway.main:app --reload --port 8000
+uvicorn gateway.main:app --reload --port 9010
 ```
 
 ### Docker

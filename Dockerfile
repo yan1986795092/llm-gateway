@@ -1,28 +1,22 @@
-FROM python:3.11-slim AS base
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-FROM base AS builder
 
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir poetry && \
-    poetry export --without-hashes -o requirements.txt && \
-    pip install --no-cache-dir --prefix=/install -r requirements.txt
+COPY gateway ./gateway
+COPY README.md ./README.md
 
-FROM base
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install .
 
-COPY --from=builder /install /usr/local
-COPY gateway/ ./gateway/
+EXPOSE 9010
 
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:9010/health')"
 
-EXPOSE 8000
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-CMD ["uvicorn", "gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "gateway.main:app", "--host", "0.0.0.0", "--port", "9010"]

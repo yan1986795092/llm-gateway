@@ -17,6 +17,7 @@ class RequestContext:
     model: str | None = None
     provider: str | None = None
     source_app: str | None = None
+    route_hint: str | None = None
 
     def elapsed_ms(self) -> float:
         return (time.perf_counter() - self.started_at) * 1000
@@ -28,4 +29,5 @@ class RequestContext:
             "elapsed_ms": round(self.elapsed_ms(), 2),
             "model": self.model,
             "provider": self.provider,
+            "route_hint": self.route_hint,
         }
