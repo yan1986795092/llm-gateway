@@ -11,6 +11,7 @@ from gateway.api.routes import router
 from gateway.core.exceptions import GatewayError, CircuitBreakerOpenError, RateLimitError
 from gateway.logging_shared.config import setup, get_logger
 from gateway.logging_shared.middleware import LoggingMiddleware
+from gateway.logging_shared.unified_writer import UnifiedEsWriter
 from gateway.config.settings import get_settings
 
 
@@ -25,21 +26,21 @@ async def lifespan(app: FastAPI):
     logger = get_logger("gateway")
     logger.info("gateway_startup", **({"message": "LLM Gateway 启动"}))
 
-    # 启动 ES 异步日志写入器
+    # 启动 UnifiedEsWriter
     try:
-        from gateway.logging_shared.es_writer import start_writer as _start_es
-        await _start_es()
-    except Exception:
-        pass
+        writer = UnifiedEsWriter.get_instance()
+        await writer.start()
+    except Exception as exc:
+        logger.warning("UnifiedEsWriter start failed (non-fatal): %s", exc)
 
     yield
 
-    # 关闭 ES 写入器
+    # 关闭 UnifiedEsWriter
     try:
-        from gateway.logging_shared.es_writer import stop_writer as _stop_es
-        await _stop_es()
-    except Exception:
-        pass
+        writer = UnifiedEsWriter.get_instance()
+        await writer.stop()
+    except Exception as exc:
+        logger.warning("UnifiedEsWriter stop error: %s", exc)
 
     logger = get_logger("gateway")
     logger.info("gateway_shutdown", **({"message": "LLM Gateway 关闭"}))
