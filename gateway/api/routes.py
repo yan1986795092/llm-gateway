@@ -218,7 +218,7 @@ async def chat_completions(
             ctx.model = adapter.model
             ctx.provider = adapter.provider_name
             logger.warning(
-                "Provider '%s' failed, falling back to '%s' (attempt %d/%d)",
+                "Provider '%s' 失败，切换到 '%s'（第 %d/%d 次尝试）",
                 failed_name,
                 adapter.provider_name,
                 attempt + 1,
@@ -255,6 +255,12 @@ async def _stream_response(
         cb_plugin.record_success(adapter.provider_name)
     except Exception as e:
         cb_plugin.record_failure(adapter.provider_name)
+        logger.warning(
+            "SSE 流错误（provider: %s）: %s",
+            adapter.provider_name,
+            e,
+            exc_info=True,
+        )
         yield f"data: {json.dumps({'error': {'message': str(e), 'type': 'api_error'}})}\n\n"
 
 
@@ -267,8 +273,12 @@ async def list_models() -> ModelList:
         try:
             provider_models = await adapter.list_models()
             models.extend(provider_models)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "list_models 失败（adapter: %s）: %s",
+                adapter.__class__.__name__,
+                e,
+            )
     return ModelList(data=models)
 
 

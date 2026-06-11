@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from gateway.api.routes import router
@@ -69,13 +70,67 @@ async def gateway_error_handler(request: Request, exc: GatewayError) -> JSONResp
     if isinstance(exc, CircuitBreakerOpenError):
         headers["Retry-After"] = str(exc.cooldown)
 
+    logger = get_logger("gateway")
+    logger.warning(
+        "网关异常",
+        error_code=exc.error_code,
+        status=exc.status_code,
+        path=request.url.path,
+    )
     return JSONResponse(
         status_code=exc.status_code,
         headers=headers,
         content={
+            "success": False,
             "error": {
                 "message": exc.message,
+                "type": "GatewayError",
                 "code": exc.error_code,
+                "details": getattr(exc, "details", {}),
+            }
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    errors = exc.errors()
+    field_errors = {}
+    for err in errors:
+        loc = ".".join(str(l) for l in err["loc"])
+        field_errors[loc] = err["msg"]
+
+    logger = get_logger("gateway")
+    logger.warning("参数校验失败: %s", field_errors, path=request.url.path)
+
+    return JSONResponse(
+        status_code=422,
+        content={
+            "success": False,
+            "error": {
+                "message": "Request validation failed",
+                "type": "RequestValidationError",
+                "code": "VALIDATION_ERROR",
+                "details": {"fields": field_errors},
+            }
+        },
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    logger = get_logger("gateway")
+    logger.warning("HTTP 异常 %d: %s", exc.status_code, exc.detail, path=request.url.path)
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "success": False,
+            "error": {
+                "message": exc.detail,
+                "type": "HTTPException",
+                "code": f"HTTP_{exc.status_code}",
+                "details": {},
             }
         },
     )
@@ -85,18 +140,21 @@ async def gateway_error_handler(request: Request, exc: GatewayError) -> JSONResp
 async def generic_error_handler(request: Request, exc: Exception) -> JSONResponse:
     logger = get_logger("gateway")
     logger.error(
-        "unhandled_exception",
-        **{
-            "error_type": type(exc).__name__,
-            "error_message": str(exc),
-        },
+        "未处理异常: %s",
+        exc,
+        exc_info=True,
+        path=request.url.path,
+        error_type=type(exc).__name__,
     )
     return JSONResponse(
         status_code=500,
         content={
+            "success": False,
             "error": {
-                "message": "内部服务错误",
-                "code": "internal_error",
+                "message": "发生内部错误，请稍后重试。",
+                "type": type(exc).__name__,
+                "code": "INTERNAL_ERROR",
+                "details": {},
             }
         },
     )

@@ -32,7 +32,7 @@ def _get_or_create_trace_id(request: Request) -> str:
 
 
 class LoggingMiddleware(BaseHTTPMiddleware):
-    """FastAPI 中间件: 单行 access-log + Jaeger span 写入 UnifiedEsWriter."""
+    """FastAPI 中间件: 单行 access-log + trace span 写入 UnifiedEsWriter."""
 
     def __init__(self, app: ASGIApp, service_name: str):
         super().__init__(app)
@@ -67,7 +67,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                 trace_id=trace_id,
             )
 
-            # Write Jaeger span via UnifiedEsWriter
+            # Write trace span via UnifiedEsWriter
             span = {
                 "traceID": trace_id,
                 "spanID": span_id,

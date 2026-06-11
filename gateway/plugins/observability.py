@@ -8,7 +8,7 @@ from gateway.core.context import RequestContext
 from gateway.api.schemas import ChatCompletionRequest
 from gateway.logging_shared.config import get_logger
 from gateway.logging_shared.fields import (
-    TRACE_ID, EVENT, LLM_MODEL, LLM_PROVIDER, LLM_LATENCY_MS,
+    TRACE_ID, LLM_MODEL, LLM_PROVIDER, LLM_LATENCY_MS,
     LLM_PROMPT_TOKENS, LLM_COMPLETION_TOKENS, LLM_TOTAL_TOKENS,
     LLM_STREAMING, DURATION_MS, SOURCE_APP, LLM_REQUEST_START,
     LLM_REQUEST_END, LLM_REQUEST_ERROR, STATUS_CODE,
@@ -33,9 +33,8 @@ class ObservabilityPlugin(Plugin):
     ) -> ChatCompletionRequest:
         self._request_count += 1
         logger.info(
-            EVENT,
+            LLM_REQUEST_START,
             **{
-                EVENT: LLM_REQUEST_START,
                 TRACE_ID: ctx.trace_id,
                 LLM_MODEL: request.model,
                 LLM_STREAMING: request.stream,
@@ -57,9 +56,8 @@ class ObservabilityPlugin(Plugin):
         total_tokens = usage.get("total_tokens", 0)
 
         logger.info(
-            EVENT,
+            LLM_REQUEST_END,
             **{
-                EVENT: LLM_REQUEST_END,
                 TRACE_ID: ctx.trace_id,
                 LLM_MODEL: ctx.model,
                 LLM_PROVIDER: ctx.provider,
@@ -77,9 +75,8 @@ class ObservabilityPlugin(Plugin):
         self._error_count += 1
         elapsed_ms = round((time.perf_counter() - ctx.started_at) * 1000, 2)
         logger.error(
-            EVENT,
+            LLM_REQUEST_ERROR,
             **{
-                EVENT: LLM_REQUEST_ERROR,
                 TRACE_ID: ctx.trace_id,
                 LLM_MODEL: ctx.model,
                 LLM_PROVIDER: ctx.provider,
