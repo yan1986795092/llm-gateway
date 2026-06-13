@@ -240,7 +240,12 @@ async def _stream_response(
     cb_plugin: Any,
     cache: Any,
 ) -> AsyncIterator[str]:
-    """Yield SSE stream chunks."""
+    """Yield SSE stream chunks.
+
+    Handles both content chunks and usage metadata from the adapter.
+    Usage info is forwarded in a format that LangChain's ChatOpenAI
+    can extract (choices=[] with usage field).
+    """
     chunk_id = f"chatcmpl-{ctx.trace_id}"
     try:
         async for chunk in adapter.chat_completions_stream(
@@ -249,7 +254,16 @@ async def _stream_response(
             max_tokens=request.effective_max_tokens(),
             **request.extra_payload(),
         ):
-            yield f"data: {json.dumps({'id': chunk_id, 'choices': [{'index': 0, 'delta': {'content': chunk}}]})}\n\n"
+            # Detect usage marker from adapter
+            if isinstance(chunk, str) and chunk.startswith('{"type": "usage"'):
+                usage_data = json.loads(chunk)
+                usage_payload = {
+                    "prompt_tokens": usage_data.get("prompt_tokens", 0),
+                    "completion_tokens": usage_data.get("completion_tokens", 0),
+                }
+                yield f"data: {json.dumps({'id': chunk_id, 'choices': [], 'usage': usage_payload})}\n\n"
+            else:
+                yield f"data: {json.dumps({'id': chunk_id, 'choices': [{'index': 0, 'delta': {'content': chunk}}]})}\n\n"
         yield f"data: {json.dumps({'id': chunk_id, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
         yield "data: [DONE]\n\n"
         cb_plugin.record_success(adapter.provider_name)

@@ -106,12 +106,18 @@ class OpenAIAdapter(BaseAdapter):
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[str]:
-        """Yield streamed response chunks."""
+        """Yield streamed response chunks.
+
+        After all content chunks, yields a final usage marker
+        (format: {"type": "usage", "prompt_tokens": N, "completion_tokens": M})
+        if the upstream API returns usage information.
+        """
         client = self._get_client()
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "stream": True,
+            "stream_options": {"include_usage": True},  # request usage from upstream
         }
         if temperature is not None:
             payload["temperature"] = temperature
@@ -121,6 +127,8 @@ class OpenAIAdapter(BaseAdapter):
             if value is not None:
                 payload[key] = value
 
+        usage_info: dict[str, int] = {}
+
         async with client.stream("POST", "/chat/completions", json=payload) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
@@ -129,9 +137,23 @@ class OpenAIAdapter(BaseAdapter):
                     if data == "[DONE]":
                         break
                     chunk = json.loads(data)
-                    content = chunk["choices"][0].get("delta", {}).get("content", "")
-                    if content:
-                        yield content
+                    # Capture usage info from final chunk (OpenAI format:
+                    # choices=[] with usage field, or choices[n].finish_reason=stop with delta={})
+                    if "usage" in chunk and chunk["usage"]:
+                        usage_info = {
+                            "prompt_tokens": chunk["usage"].get("prompt_tokens", 0),
+                            "completion_tokens": chunk["usage"].get("completion_tokens", 0),
+                        }
+                    choices = chunk.get("choices", [])
+                    if choices:
+                        delta = choices[0].get("delta", {})
+                        content = delta.get("content", "")
+                        if content:
+                            yield content
+
+        # Emit usage as final marker if available
+        if usage_info.get("prompt_tokens") or usage_info.get("completion_tokens"):
+            yield json.dumps({"type": "usage", **usage_info})
 
     async def list_models(self) -> list[Any]:
         from gateway.api.schemas import ModelInfo

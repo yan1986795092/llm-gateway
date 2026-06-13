@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import defaultdict
-from threading import Lock
 from typing import Any
 
 from gateway.api.schemas import ChatCompletionRequest
@@ -14,46 +14,65 @@ from gateway.core.exceptions import RateLimitError
 from gateway.plugins.base import Plugin
 from gateway.config.settings import get_settings
 
+logger = logging.getLogger(__name__)
+
 
 class SlidingWindowRateLimiter:
-    """Thread-safe sliding window rate limiter."""
+    """Sliding window rate limiter — async-safe, checks both RPM and TPM."""
 
     def __init__(self, rpm: int, tpm: int):
         self.rpm = rpm
         self.tpm = tpm
-        self._lock = Lock()
+        self._lock = asyncio.Lock()
         self._requests: dict[str, list[float]] = defaultdict(list)
         self._tokens: dict[str, list[tuple[float, int]]] = defaultdict(list)
 
-    def _clean(self, times: list[float], now: float, window: float = 60.0) -> None:
-        """Remove expired entries from the window."""
-        while times and times[0] < now - window:
-            times.pop(0)
+    @staticmethod
+    def _clean(times: list, now: float, window: float = 60.0) -> None:
+        """Remove expired entries from the window.
+
+        Supports both plain timestamps (RPM tracking) and
+        (timestamp, count) tuples (TPM tracking).
+        """
+        while times:
+            first = times[0]
+            ts = first[0] if isinstance(first, (list, tuple)) else first
+            if ts < now - window:
+                times.pop(0)
+            else:
+                break
 
     async def acquire(
         self, key: str, estimated_tokens: int = 100, timeout: float = 5.0
     ) -> None:
-        """Acquire a rate limit slot. Raises RateLimitError on timeout."""
+        """Acquire a rate limit slot. Checks both RPM and TPM. Raises RateLimitError on timeout."""
         deadline = time.time() + timeout
         while True:
-            acquired = self._try_acquire(key, estimated_tokens)
+            acquired = await self._try_acquire(key, estimated_tokens)
             if acquired:
                 return
             remaining = deadline - time.time()
             if remaining <= 0:
                 raise RateLimitError(
-                    f"Rate limit exceeded for key '{key}'",
+                    f"Rate limit exceeded for key '{key}' (RPM={self.rpm}, TPM={self.tpm})",
                     retry_after=int(timeout),
                 )
             await asyncio.sleep(min(0.1, remaining))
 
-    def _try_acquire(self, key: str, estimated_tokens: int) -> bool:
+    async def _try_acquire(self, key: str, estimated_tokens: int) -> bool:
         now = time.time()
-        with self._lock:
+        async with self._lock:
+            # RPM check
             self._clean(self._requests[key], now)
             if len(self._requests[key]) >= self.rpm:
                 return False
+            # TPM check
+            self._clean(self._tokens[key], now)
+            current_tpm = sum(tc for _, tc in self._tokens[key])
+            if current_tpm + estimated_tokens > self.tpm:
+                return False
             self._requests[key].append(now)
+            self._tokens[key].append((now, estimated_tokens))
             return True
 
 

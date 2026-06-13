@@ -11,8 +11,8 @@ COPY pyproject.toml ./
 COPY gateway ./gateway
 COPY README.md ./README.md
 
-RUN pip install --upgrade pip setuptools wheel && \
-    pip install .
+RUN pip install --upgrade pip setuptools wheel -i https://pypi.tuna.tsinghua.edu.cn/simple && \
+    pip install . -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 EXPOSE 9010
 

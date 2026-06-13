@@ -95,6 +95,25 @@ class Settings(BaseSettings):
             return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/{self.redis_db}"
         return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
 
+    @classmethod
+    def _env_redis_url(cls) -> str | None:
+        """读取 REDIS_URL 环境变量（如果有则优先使用）。
+
+        Docker Compose 生产部署中通过环境变量注入 REDIS_URL，
+        而 pydantic-settings 的字段映射只认 REDIS_HOST / REDIS_PORT / REDIS_DB。
+        此方法允许 REDIS_URL 作为快捷方式覆盖各组件字段。
+        """
+        import os
+        return os.environ.get("REDIS_URL") or None
+
+    @property
+    def resolved_redis_url(self) -> str:
+        """返回实际使用的 Redis URL，优先使用 REDIS_URL 环境变量。"""
+        url = self._env_redis_url()
+        if url:
+            return url
+        return self.redis_url
+
 
 @lru_cache
 def get_settings() -> Settings:
