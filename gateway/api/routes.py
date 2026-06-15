@@ -101,7 +101,7 @@ async def chat_completions(
         if not adapter:
             # 精确匹配失败时尝试 AutoRouter 兜底
             obs = _get_obs_plugin()
-            obs.warning(f"Model '{request.model}' not found, falling back to auto-router")
+            logger.warning("Model '%s' not found, falling back to auto-router", request.model)
             selected = router_dep.select(
                 [{"role": m.role, "content": m.content} for m in req.messages],
                 hint="balanced",

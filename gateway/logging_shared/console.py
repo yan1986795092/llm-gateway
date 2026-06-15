@@ -1,4 +1,4 @@
-"""Access-log style console output — one line per HTTP request.
+"""Access-log style console output — one line per HTTP request (中文标签版).
 
 Usage:
     from .console import log_http_line
@@ -13,6 +13,22 @@ import sys
 
 _console_handler: logging.Handler | None = None
 _console_logger: logging.Logger | None = None
+
+# 中文标签映射
+_LEVEL_LABELS = {
+    "INFO": "信息",
+    "WARNING": "警告",
+    "ERROR": "错误",
+}
+
+_AGENT_LABELS = {
+    "agent_start": "▶ 开始",
+    "agent_finish": "✓ 完成",
+    "tool_call": "⚙ 调用",
+    "tool_result": "📎 结果",
+    "thought": "💭 思考",
+    "error": "✗ 错误",
+}
 
 
 def _ensure_logger() -> logging.Logger:
@@ -43,34 +59,35 @@ def log_http_line(
     duration_ms: float,
     trace_id: str = "",
     error: str = "",
+    request_summary: str = "",
+    response_summary: str = "",
 ) -> None:
-    """Print one access-log-style line per HTTP request.
-
-    Format: {level}:  {method} {path} {status} {duration}ms [trace:{id}]
-    Errors append error info after duration.
-    """
+    """Print one access-log-style line with Chinese labels."""
     parts = [f"{method} {path} {status} {duration_ms:.0f}ms"]
+    if request_summary:
+        parts.append(f"入参:{request_summary}")
+    if response_summary:
+        parts.append(f"出参:{response_summary}")
     if trace_id:
         parts.append(f"[trace:{trace_id[:12]}]")
     if error:
-        parts.append(error)
+        parts.append(f"错误:{error}")
 
     line = " ".join(parts)
     logger = _ensure_logger()
+    level_label = _LEVEL_LABELS.get(level, level)
     if level == "ERROR":
-        logger.error(line)
+        logger.error(f"[{level_label}] {line}")
+    elif level == "WARNING":
+        logger.warning(f"[{level_label}] {line}")
     else:
-        logger.info(line)
+        logger.info(f"[{level_label}] {line}")
 
 
 def log_agent_line(event_type: str, agent_name: str = "", **details) -> None:
-    """Print a compact one-line agent event summary (dev environment).
-
-    Format: agent_start  WritingAgent  run=abc12345
-            tool_call    read_file     45ms
-            agent_finish WritingAgent  12.5s  tokens=1500  cost=$0.0006
-    """
-    parts = [event_type]
+    """Print a compact one-line agent event summary with Chinese labels."""
+    label = _AGENT_LABELS.get(event_type, event_type)
+    parts = [label]
     if agent_name:
         parts.append(agent_name)
     for key, value in details.items():
