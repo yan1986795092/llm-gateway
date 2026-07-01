@@ -43,10 +43,10 @@ class Settings(BaseSettings):
     zhipu_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
     zhipu_model: str = "glm-4-flash"
 
-    # Qwen（阿里通义千问，国内可用）
+    # Qwen（阿里通义千问，国内可用，主力）
     qwen_api_key: str | None = None
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    qwen_model: str = "qwen-plus"
+    qwen_model: str = "qwen3.7-max"
 
     # DeepSeek（OpenAI 协议兼容）
     deepseek_api_key: str | None = None

@@ -197,11 +197,11 @@ _PROVIDER_CAPS: dict[str, dict[str, Any]] = {
     },
     "qwen": {
         "supports_function_calling": True,
-        "max_tokens": 8192,
+        "max_tokens": 32768,
         "cost_per_1k_input": 0.02,
         "cost_per_1k_output": 0.06,
-        "typical_latency_ms": 1000,
-        "quality_score": 0.8,
+        "typical_latency_ms": 1100,
+        "quality_score": 0.92,
     },
     "openai": {
         "supports_function_calling": True,
