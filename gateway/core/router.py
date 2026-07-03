@@ -124,6 +124,7 @@ class AutoRouter:
         messages: list[dict[str, str]],
         exclude_providers: set[str] | None = None,
         hint: str = "",
+        require_function_calling: bool = False,
     ) -> ModelScore:
         """Select the best adapter for the given request.
 
@@ -133,19 +134,30 @@ class AutoRouter:
             hint: Optional route hint from X-Route-Hint header.
                   Overrides task_type auto-detection.
                   Values: planning, creative, analysis, code, simple, balanced.
+            require_function_calling: If True, only select adapters that support
+                  function calling (tools). Prevents routing to models like
+                  glm-4-flash that lack tool support, which would cause
+                  bind_tools failures downstream.
         """
         task_type = self._HINT_TO_TASK_TYPE.get(hint, "")
         if not task_type:
             task_type = self._detect_task_type(messages)
 
-        candidates = [
-            (adapter, adapter.get_capabilities())
-            for adapter in self._adapters
-            if (exclude_providers is None or adapter.provider_name not in exclude_providers)
-        ]
+        candidates: list[tuple[BaseAdapter, ModelCapabilities]] = []
+        for adapter in self._adapters:
+            if exclude_providers and adapter.provider_name in exclude_providers:
+                continue
+            caps = adapter.get_capabilities()
+            if require_function_calling and not caps.supports_function_calling:
+                continue
+            candidates.append((adapter, caps))
 
         if not candidates:
-            raise RuntimeError("No available providers")
+            raise RuntimeError(
+                "No available providers"
+                if not require_function_calling
+                else "No providers support function calling"
+            )
 
         scores: list[ModelScore] = []
         for adapter, caps in candidates:

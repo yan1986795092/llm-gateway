@@ -79,7 +79,9 @@ async def chat_completions(
             raise GatewayError("Request blocked by plugin")
 
     # Select adapter — 优先使用 AutoRouter
+    # 当请求携带 tools 参数时，强制过滤不支持 function calling 的模型
     route_hint = http_request.headers.get("X-Route-Hint", "")
+    _require_fc = bool(req.tools or req.tool_choice)
 
     if request.model == "auto" or not request.model or route_hint:
         # 从 header 获取任务类型提示
@@ -87,6 +89,7 @@ async def chat_completions(
         selected = router_dep.select(
             [{"role": m.role, "content": m.content} for m in req.messages],
             hint=hint,
+            require_function_calling=_require_fc,
         )
         adapter = selected.adapter
         ctx.model = adapter.model
@@ -105,6 +108,7 @@ async def chat_completions(
             selected = router_dep.select(
                 [{"role": m.role, "content": m.content} for m in req.messages],
                 hint="balanced",
+                require_function_calling=_require_fc,
             )
             adapter = selected.adapter
             ctx.model = adapter.model
@@ -157,20 +161,24 @@ async def chat_completions(
             }
             await obs.post_response(ctx, response_dict)
 
+            # 从原始响应提取 tool_calls（非流式路径）
+            tool_calls = response.raw.get("choices", [{}])[0].get("message", {}).get("tool_calls")
+
             # 写入缓存
             cache_key = f"llm:cache:{req.hash_key()}"
+            cached_choice: dict[str, Any] = {
+                "message": {"role": "assistant", "content": response.content},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+            if tool_calls:
+                cached_choice["message"]["tool_calls"] = tool_calls
             await cache.store_response(
                 cache_key,
                 {
                     "id": f"chatcmpl-{ctx.trace_id}",
                     "model": response.model,
-                    "choices": [
-                        {
-                            "message": {"role": "assistant", "content": response.content},
-                            "finish_reason": "stop",
-                            "index": 0,
-                        }
-                    ],
+                    "choices": [cached_choice],
                     "usage": {
                         "prompt_tokens": response.prompt_tokens,
                         "completion_tokens": response.completion_tokens,
@@ -179,17 +187,19 @@ async def chat_completions(
                 },
             )
 
+            choice_payload: dict[str, Any] = {
+                "index": 0,
+                "message": {"role": "assistant", "content": response.content},
+                "finish_reason": "stop",
+            }
+            if tool_calls:
+                choice_payload["message"]["tool_calls"] = tool_calls
+
             return ChatCompletionResponse(
                 id=f"chatcmpl-{ctx.trace_id}",
                 created=int(time.time()),
                 model=response.model,
-                choices=[
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": response.content},
-                        "finish_reason": "stop",
-                    }
-                ],
+                choices=[choice_payload],
                 usage=UsageInfo(
                     prompt_tokens=response.prompt_tokens,
                     completion_tokens=response.completion_tokens,
@@ -212,6 +222,7 @@ async def chat_completions(
                 messages,
                 hint="balanced",
                 exclude_providers=failed_providers,
+                require_function_calling=_require_fc,
             )
             failed_name = adapter.provider_name
             adapter = selected.adapter
@@ -242,9 +253,10 @@ async def _stream_response(
 ) -> AsyncIterator[str]:
     """Yield SSE stream chunks.
 
-    Handles both content chunks and usage metadata from the adapter.
-    Usage info is forwarded in a format that LangChain's ChatOpenAI
-    can extract (choices=[] with usage field).
+    Handles content chunks, tool_calls deltas, and usage metadata from the adapter.
+    Tool calls are forwarded in the standard OpenAI streaming format
+    (delta.tool_calls) so that LangChain's ChatOpenAI can parse them.
+    Usage info is forwarded as choices=[] with usage field.
     """
     chunk_id = f"chatcmpl-{ctx.trace_id}"
     try:
@@ -254,16 +266,26 @@ async def _stream_response(
             max_tokens=request.effective_max_tokens(),
             **request.extra_payload(),
         ):
-            # Detect usage marker from adapter
-            if isinstance(chunk, str) and chunk.startswith('{"type": "usage"'):
-                usage_data = json.loads(chunk)
-                usage_payload = {
-                    "prompt_tokens": usage_data.get("prompt_tokens", 0),
-                    "completion_tokens": usage_data.get("completion_tokens", 0),
-                }
-                yield f"data: {json.dumps({'id': chunk_id, 'choices': [], 'usage': usage_payload})}\n\n"
-            else:
-                yield f"data: {json.dumps({'id': chunk_id, 'choices': [{'index': 0, 'delta': {'content': chunk}}]})}\n\n"
+            # Try to parse as a structured marker (tool_calls or usage)
+            if isinstance(chunk, str) and chunk.startswith("{"):
+                try:
+                    data = json.loads(chunk)
+                    if data.get("type") == "tool_calls":
+                        # Forward tool_calls delta in OpenAI streaming format
+                        delta = {"tool_calls": data["tool_calls"]}
+                        yield f"data: {json.dumps({'id': chunk_id, 'choices': [{'index': data.get('index', 0), 'delta': delta}]})}\n\n"
+                        continue
+                    elif data.get("type") == "usage":
+                        usage_payload = {
+                            "prompt_tokens": data.get("prompt_tokens", 0),
+                            "completion_tokens": data.get("completion_tokens", 0),
+                        }
+                        yield f"data: {json.dumps({'id': chunk_id, 'choices': [], 'usage': usage_payload})}\n\n"
+                        continue
+                except json.JSONDecodeError:
+                    pass
+            # Plain text chunk — wrap as delta.content
+            yield f"data: {json.dumps({'id': chunk_id, 'choices': [{'index': 0, 'delta': {'content': chunk}}]})}\n\n"
         yield f"data: {json.dumps({'id': chunk_id, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
         yield "data: [DONE]\n\n"
         cb_plugin.record_success(adapter.provider_name)

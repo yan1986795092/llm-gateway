@@ -86,7 +86,8 @@ class OpenAIAdapter(BaseAdapter):
         if stream:
             content = ""
         else:
-            content = data["choices"][0]["message"]["content"] or ""
+            choice = data["choices"][0]["message"]
+            content = choice.get("content") or ""
 
         usage = data.get("usage", {})
         return ChatResponse(
@@ -108,9 +109,18 @@ class OpenAIAdapter(BaseAdapter):
     ) -> AsyncIterator[str]:
         """Yield streamed response chunks.
 
-        After all content chunks, yields a final usage marker
-        (format: {"type": "usage", "prompt_tokens": N, "completion_tokens": M})
-        if the upstream API returns usage information.
+        Yields:
+            - Content text chunks (plain str) for normal text deltas.
+            - JSON marker strings for structured data:
+              * {"type": "tool_calls", "tool_calls": [...], "index": N}
+                when the delta contains tool_calls.
+              * {"type": "usage", "prompt_tokens": N, "completion_tokens": M}
+                as a final marker from the upstream API.
+
+        Tool calls from the upstream are forwarded so that _stream_response
+        can reconstruct proper SSE events with delta.tool_calls — this is
+        required for LangChain's ChatOpenAI to parse tool calls from streamed
+        responses.
         """
         client = self._get_client()
         payload: dict[str, Any] = {
@@ -150,6 +160,15 @@ class OpenAIAdapter(BaseAdapter):
                         content = delta.get("content", "")
                         if content:
                             yield content
+                        # Forward tool_calls delta as a JSON marker so that
+                        # _stream_response can build proper SSE with delta.tool_calls.
+                        tool_calls = delta.get("tool_calls")
+                        if tool_calls:
+                            yield json.dumps({
+                                "type": "tool_calls",
+                                "tool_calls": tool_calls,
+                                "index": choices[0].get("index", 0),
+                            })
 
         # Emit usage as final marker if available
         if usage_info.get("prompt_tokens") or usage_info.get("completion_tokens"):
@@ -186,9 +205,13 @@ class OpenAIAdapter(BaseAdapter):
 
 
 # Per-provider model capabilities
+# ⚠️ 注意：glm-4-flash（轻量版）不支持 function calling！
+# 如需启用 zhipu function calling，换用 glm-4 / glm-4-plus / glm-4-alltools 等全功能模型。
 _PROVIDER_CAPS: dict[str, dict[str, Any]] = {
     "zhipu": {
-        "supports_function_calling": True,
+        # glm-4-flash 是轻量版，bind_tools 后会输出裸参数文本而非 tool_call，
+        # 导致 conversation engine 崩溃。请换用 glm-4 / glm-4-plus。
+        "supports_function_calling": False,
         "max_tokens": 8192,
         "cost_per_1k_input": 0.01,
         "cost_per_1k_output": 0.01,
