@@ -127,7 +127,6 @@ class OpenAIAdapter(BaseAdapter):
             "model": self.model,
             "messages": messages,
             "stream": True,
-            "stream_options": {"include_usage": True},  # request usage from upstream
         }
         if temperature is not None:
             payload["temperature"] = temperature
