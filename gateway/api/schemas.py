@@ -57,9 +57,14 @@ class ChatCompletionRequest(BaseModel):
             payload["parallel_tool_calls"] = self.parallel_tool_calls
         return payload
 
-    def hash_key(self) -> str:
-        """Generate a cache key from messages + params."""
+    def hash_key(self, model: str | None = None) -> str:
+        """Generate a cache key from messages + params + model.
+
+        model 必须纳入 key：同一批消息在不同 model（含 "auto"）下产出可能
+        完全不同，缺 model 维度会跨模型命中旧答案（缓存污染，Z4 坑）。
+        """
         data = {
+            "model": model or self.model or "auto",
             "messages": [{"role": m.role, "content": m.content} for m in self.messages],
             "temperature": self.temperature,
             "max_tokens": self.effective_max_tokens(),
@@ -98,7 +103,7 @@ class ChatCompletionResponse(BaseModel):
 class ModelInfo(BaseModel):
     id: str
     object: str = "model"
-    created: int
+    created: int | None = None
     owned_by: str = "gateway"
 
 

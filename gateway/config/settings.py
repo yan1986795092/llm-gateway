@@ -43,10 +43,10 @@ class Settings(BaseSettings):
     zhipu_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
     zhipu_model: str = "glm-4-flash"
 
-    # Qwen（阿里通义千问，国内可用，主力）
+    # Qwen（阿里通义千问，国内可用）
     qwen_api_key: str | None = None
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    qwen_model: str = "qwen3.7-max"
+    qwen_model: str = "qwen-plus"
 
     # DeepSeek（OpenAI 协议兼容）
     deepseek_api_key: str | None = None
@@ -64,6 +64,24 @@ class Settings(BaseSettings):
     # Ollama
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"
+
+    # 多项目共用鉴权：key -> project 映射，格式 "project1=key1,project2=key2"
+    # 供应商配置文件（方案A：加供应商只改此文件+重启）
+    gateway_providers_file: str = "providers.json"
+    # 单项目省事模式：保持为空即可（网关不校验，客户端也不必配 key）
+    gateway_projects: str = ""
+    # 鉴权开关：与 gateway_projects 同时满足时才强制校验（401）
+    gateway_auth_required: bool = False
+
+    # 私有化微调模型（llama.cpp / OpenAI 兼容）
+    private_qwen_api_key: str | None = None
+    private_qwen_base_url: str = "http://127.0.0.1:12789/v1"
+    private_qwen_model: str = "qwen2.5-3b"
+
+    # AiHubMix（OpenAI 兼容，免费/低价模型）
+    aihubmix_api_key: str | None = None
+    aihubmix_base_url: str = "https://aihubmix.com/v1"
+    aihubmix_model: str = "gpt-4o-free"
 
     # Rate Limiting
     rate_limit_rpm: int = 60

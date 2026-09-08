@@ -92,7 +92,8 @@ class RateLimiterPlugin(Plugin):
     async def pre_request(
         self, ctx: RequestContext, request: ChatCompletionRequest
     ) -> ChatCompletionRequest | None:
-        key = ctx.source_app or "default"
+        # 租户 + 应用 双层分桶：不同项目配额互不影响
+        key = f"{(ctx.project or 'default')}:{ctx.source_app or 'default'}"
         estimated_tokens = sum(len(m.content) // 4 for m in request.messages)
         await self._limiter.acquire(key, estimated_tokens)
         return request

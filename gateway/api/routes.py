@@ -52,8 +52,12 @@ def _get_obs_plugin() -> ObservabilityPlugin:
 
 
 def _get_ctx(request: Request) -> RequestContext:
+    from gateway.api.dependencies import require_project
+    project = require_project(request)
     return RequestContext(
         source_app=request.headers.get("X-Source-App", "unknown"),
+        project=project,
+        api_key=request.headers.get("Authorization", ""),
     )
 
 
@@ -102,7 +106,15 @@ async def chat_completions(
             None,
         )
         if not adapter:
-            # 精确匹配失败时尝试 AutoRouter 兜底
+            if explicit_model:
+                # 精确指定但网关注册表无此模型：直接失败（不做 auto 兜底）
+                raise GatewayError(
+                    "Model " + request.model + " is not registered for explicit routing. "
+                    "Use 'auto' for smart routing or pick a routable model.",
+                    status_code=404,
+                    error_code="model_not_registered",
+                )
+            # auto 场景：精确匹配失败时尝试 AutoRouter 兜底
             obs = _get_obs_plugin()
             logger.warning("Model '%s' not found, falling back to auto-router", request.model)
             selected = router_dep.select(
@@ -121,6 +133,9 @@ async def chat_completions(
     # 适配器调用 + Provider 自动 Fallback
     # 主 provider 失败时自动排除并重试下一个
     # ──────────────────────────────────────────────
+    # 【收敛 2026-09-08】精确指定模型（model 非 auto）时禁止跨供应商 fallback：
+    # 固定模型失败就失败（保持"选择即所用"），兜底只存在于 auto 智能路由场景。
+    explicit_model = bool(request.model) and request.model != "auto"
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
     failed_providers: set[str] = set()
     last_error: Exception | None = None
@@ -164,8 +179,9 @@ async def chat_completions(
             # 从原始响应提取 tool_calls（非流式路径）
             tool_calls = response.raw.get("choices", [{}])[0].get("message", {}).get("tool_calls")
 
-            # 写入缓存
-            cache_key = f"llm:cache:{req.hash_key()}"
+            # 写入缓存（key 与 cache 插件读取侧完全一致：project + model 维度）
+            model_inlined = req.model or "auto"
+            cache_key = f"llm:cache:{ctx.project or 'default'}:{model_inlined}:{req.hash_key(model=model_inlined)}"
             cached_choice: dict[str, Any] = {
                 "message": {"role": "assistant", "content": response.content},
                 "finish_reason": "stop",
@@ -212,7 +228,11 @@ async def chat_completions(
             failed_providers.add(adapter.provider_name)
             last_error = e
 
-            # 尝试 fallback 到下一个可用 provider
+            # 【收敛】精确固定模型：失败即失败，不做跨供应商兜底
+            if explicit_model:
+                break
+
+            # auto 场景：尝试 fallback 到下一个可用 provider
             remaining = [a for a in adapters if a.provider_name not in failed_providers]
             if not remaining:
                 break  # 全部 provider 都失败了，抛出原始异常
@@ -301,9 +321,20 @@ async def _stream_response(
 
 
 @router.get("/v1/models", response_model=ModelList)
-async def list_models() -> ModelList:
-    """List available models."""
+async def list_models(request: Request, routable: bool = False) -> ModelList:
+    """List available models.
+
+    routable=true 时仅返回"可被精确指定路由"的模型（各 adapter 默认 model）：
+    只有请求 model 精确等于某 adapter.model 时网关才"只调这个上游"，
+    否则会 fallback 到 auto-router（模型由网关决定）。
+    业务侧（如智能助手管理页）应展示此列表 + auto，保证"前端选择=网关实际使用"。
+    """
+    from gateway.api.dependencies import require_project, build_adapters
+    require_project(request)
     adapters = build_adapters()
+    if routable:
+        models = [ModelInfo(id=a.model, owned_by=a.provider_name) for a in adapters]
+        return ModelList(data=models)
     models: list[ModelInfo] = []
     for adapter in adapters:
         try:

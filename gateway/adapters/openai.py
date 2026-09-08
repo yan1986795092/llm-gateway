@@ -14,7 +14,7 @@ from gateway.config.settings import get_settings
 
 
 class OpenAIAdapter(BaseAdapter):
-    """Adapter for OpenAI-compatible APIs (OpenAI, Zhipu, Qwen, Azure, local proxies)."""
+    """Adapter for OpenAI-compatible APIs (OpenAI, Zhipu, Azure, local proxies)."""
 
     def __init__(
         self,
@@ -217,14 +217,6 @@ _PROVIDER_CAPS: dict[str, dict[str, Any]] = {
         "typical_latency_ms": 1200,
         "quality_score": 0.75,
     },
-    "qwen": {
-        "supports_function_calling": True,
-        "max_tokens": 32768,
-        "cost_per_1k_input": 0.02,
-        "cost_per_1k_output": 0.06,
-        "typical_latency_ms": 1100,
-        "quality_score": 0.92,
-    },
     "openai": {
         "supports_function_calling": True,
         "max_tokens": 16384,
@@ -240,5 +232,21 @@ _PROVIDER_CAPS: dict[str, dict[str, Any]] = {
         "cost_per_1k_output": 0.028,
         "typical_latency_ms": 900,
         "quality_score": 0.82,
+    },
+    "aihubmix": {
+        "supports_function_calling": True,
+        "max_tokens": 16384,
+        "cost_per_1k_input": 0.0,
+        "cost_per_1k_output": 0.0,
+        "typical_latency_ms": 1200,
+        "quality_score": 0.8,
+    },
+    "private_qwen": {
+        "supports_function_calling": False,
+        "max_tokens": 8192,
+        "cost_per_1k_input": 0.0,
+        "cost_per_1k_output": 0.0,
+        "typical_latency_ms": 900,
+        "quality_score": 0.7,
     },
 }

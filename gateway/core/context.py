@@ -18,6 +18,9 @@ class RequestContext:
     provider: str | None = None
     source_app: str | None = None
     route_hint: str | None = None
+    # 租户/项目维度：多项目共用网关时区分缓存、限流与审计归属
+    project: str | None = None
+    api_key: str | None = None
 
     def elapsed_ms(self) -> float:
         return (time.perf_counter() - self.started_at) * 1000
@@ -30,4 +33,5 @@ class RequestContext:
             "model": self.model,
             "provider": self.provider,
             "route_hint": self.route_hint,
+            "project": self.project,
         }

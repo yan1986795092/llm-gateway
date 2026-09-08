@@ -50,3 +50,6 @@ htmlcov/
 # OS
 Thumbs.db
 Desktop.ini
+
+# Secrets（provider 配置含明文 key，勿提交）
+providers.json

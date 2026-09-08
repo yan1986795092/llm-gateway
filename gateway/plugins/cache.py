@@ -97,7 +97,10 @@ class CachePlugin(Plugin):
         if request.stream:
             return request
 
-        cache_key = self._prefix + request.hash_key()
+        # 租户 + 模型维度隔离：避免跨项目/跨模型命中旧答案（缓存污染）
+        project = (ctx.project or "default")
+        model = (request.model or "auto")
+        cache_key = f"{self._prefix}{project}:{model}:{request.hash_key(model=model)}"
         try:
             client = await self._get_client()
             cached = await client.get(cache_key)
