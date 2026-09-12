@@ -53,3 +53,6 @@ Desktop.ini
 
 # Secrets（provider 配置含明文 key，勿提交）
 providers.json
+
+# Server-only prod compose (contains plaintext Redis password; never commit, never deleted by git reset)
+docker-compose.prod.yml
