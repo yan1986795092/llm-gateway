@@ -56,6 +56,15 @@ def setup(
         cache_logger_on_first_use=True,
     )
 
+    # 追加文件输出：控制台没有时也可查 gateway.log（含 traceback）
+    try:
+        from pathlib import Path as _P
+        _log_file = _P(__file__).resolve().parent.parent.parent / "gateway.log"
+        _fh = logging.FileHandler(_log_file, encoding="utf-8", delay=True)
+        _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        logging.getLogger().addHandler(_fh)
+    except Exception:
+        pass
     for _name in ["uvicorn", "uvicorn.error", "uvicorn.access"]:
         _l = logging.getLogger(_name)
         if not _l.handlers:

@@ -33,6 +33,7 @@ from gateway.core.exceptions import (
     ProviderError,
     RateLimitError,
 )
+from gateway.plugins.cache import CacheHit
 from gateway.plugins.base import Plugin
 from gateway.plugins.observability import ObservabilityPlugin
 
@@ -73,22 +74,36 @@ async def chat_completions(
     cache = build_cache_plugin()
     cb_plugin = build_circuit_breaker()
     adapters = build_adapters()
+    logger.info(
+        "[gateway][request] model=%s stream=%s cache=%s messages=%d trace=%s project=%s prompt=%s",
+        request.model, request.stream, getattr(request, "cache", True),
+        len(request.messages), ctx.trace_id, getattr(ctx, "project", "?"),
+        str(request.messages[0].content[:200] if request.messages else "").replace("\n", " "),
+    )
 
     # Run plugin pre_request chain
     plugins: list[Plugin] = [rate_limiter, cache, _get_obs_plugin()]
     req = request
-    for plugin in plugins:
-        req = await plugin.pre_request(ctx, req)
-        if req is None:
-            raise GatewayError("Request blocked by plugin")
+    try:
+        for plugin in plugins:
+            req = await plugin.pre_request(ctx, req)
+            if req is None:
+                raise GatewayError("Request blocked by plugin")
+    except CacheHit as hit:
+        # 缓存命中：返回完整缓存体（OpenAI 兼容格式），而不是把内部信号当错误抛给客户端
+        return JSONResponse(status_code=200, content=hit.cached_response)
+
+    # 【收敛 2026-09-08】精确指定模型（model 非 auto）时禁止跨供应商 fallback：
+    # 固定模型失败就失败（保持"选择即所用"），兜底只存在于 auto 智能路由场景。
+    explicit_model = bool(request.model) and request.model != "auto"
 
     # Select adapter — 优先使用 AutoRouter
     # 当请求携带 tools 参数时，强制过滤不支持 function calling 的模型
     route_hint = http_request.headers.get("X-Route-Hint", "")
     _require_fc = bool(req.tools or req.tool_choice)
 
-    if request.model == "auto" or not request.model or route_hint:
-        # 从 header 获取任务类型提示
+    if not explicit_model or route_hint:
+        # model 为空 / "auto" / 带 X-Route-Hint：走 AutoRouter 智能路由
         hint = route_hint or "balanced"
         selected = router_dep.select(
             [{"role": m.role, "content": m.content} for m in req.messages],
@@ -100,42 +115,25 @@ async def chat_completions(
         ctx.provider = adapter.provider_name
         ctx.route_hint = hint
     else:
-        # 精确匹配模式（向后兼容）
+        # 精确匹配模式：只调这一个上游；注册表中无此模型 → 404（不做 auto 兜底）
         adapter = next(
             (a for a in adapters if a.model == request.model),
             None,
         )
         if not adapter:
-            if explicit_model:
-                # 精确指定但网关注册表无此模型：直接失败（不做 auto 兜底）
-                raise GatewayError(
-                    "Model " + request.model + " is not registered for explicit routing. "
-                    "Use 'auto' for smart routing or pick a routable model.",
-                    status_code=404,
-                    error_code="model_not_registered",
-                )
-            # auto 场景：精确匹配失败时尝试 AutoRouter 兜底
-            obs = _get_obs_plugin()
-            logger.warning("Model '%s' not found, falling back to auto-router", request.model)
-            selected = router_dep.select(
-                [{"role": m.role, "content": m.content} for m in req.messages],
-                hint="balanced",
-                require_function_calling=_require_fc,
+            raise GatewayError(
+                "Model " + request.model + " is not registered for explicit routing. "
+                "Use 'auto' for smart routing or pick a routable model.",
+                status_code=404,
+                error_code="model_not_registered",
             )
-            adapter = selected.adapter
-            ctx.model = adapter.model
-            ctx.provider = adapter.provider_name
-        else:
-            ctx.model = adapter.model
-            ctx.provider = adapter.provider_name
+        ctx.model = adapter.model
+        ctx.provider = adapter.provider_name
 
     # ──────────────────────────────────────────────
     # 适配器调用 + Provider 自动 Fallback
     # 主 provider 失败时自动排除并重试下一个
     # ──────────────────────────────────────────────
-    # 【收敛 2026-09-08】精确指定模型（model 非 auto）时禁止跨供应商 fallback：
-    # 固定模型失败就失败（保持"选择即所用"），兜底只存在于 auto 智能路由场景。
-    explicit_model = bool(request.model) and request.model != "auto"
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
     failed_providers: set[str] = set()
     last_error: Exception | None = None
@@ -182,6 +180,12 @@ async def chat_completions(
             # 写入缓存（key 与 cache 插件读取侧完全一致：project + model 维度）
             model_inlined = req.model or "auto"
             cache_key = f"llm:cache:{ctx.project or 'default'}:{model_inlined}:{req.hash_key(model=model_inlined)}"
+            if not (response.content or (tool_calls or [])):
+                # 残缺响应（无内容也无 tool_calls）：写缓存只会污染后续命中，
+                # 跳过写入（仍正常返回给调用方）。
+                logger.warning("跳过缓存写入：上游返回残缺响应 | model=%s provider=%s",
+                               req.model, adapter.provider_name)
+                cache_key = None
             cached_choice: dict[str, Any] = {
                 "message": {"role": "assistant", "content": response.content},
                 "finish_reason": "stop",
@@ -189,19 +193,20 @@ async def chat_completions(
             }
             if tool_calls:
                 cached_choice["message"]["tool_calls"] = tool_calls
-            await cache.store_response(
-                cache_key,
-                {
-                    "id": f"chatcmpl-{ctx.trace_id}",
-                    "model": response.model,
-                    "choices": [cached_choice],
-                    "usage": {
-                        "prompt_tokens": response.prompt_tokens,
-                        "completion_tokens": response.completion_tokens,
-                        "total_tokens": response.prompt_tokens + response.completion_tokens,
+            if cache_key and getattr(req, "cache", True):
+                await cache.store_response(
+                    cache_key,
+                    {
+                        "id": f"chatcmpl-{ctx.trace_id}",
+                        "model": response.model,
+                        "choices": [cached_choice],
+                        "usage": {
+                            "prompt_tokens": response.prompt_tokens,
+                            "completion_tokens": response.completion_tokens,
+                            "total_tokens": response.prompt_tokens + response.completion_tokens,
+                        },
                     },
-                },
-            )
+                )
 
             choice_payload: dict[str, Any] = {
                 "index": 0,
@@ -211,6 +216,12 @@ async def chat_completions(
             if tool_calls:
                 choice_payload["message"]["tool_calls"] = tool_calls
 
+            logger.info(
+                "[gateway][ok] provider=%s model=%s latency_ms=%.1f in=%s out=%s cache_key=%s trace=%s",
+                adapter.provider_name, response.model, response.latency_ms,
+                response.prompt_tokens, response.completion_tokens,
+                cache_key or "-", ctx.trace_id,
+            )
             return ChatCompletionResponse(
                 id=f"chatcmpl-{ctx.trace_id}",
                 created=int(time.time()),
@@ -224,6 +235,10 @@ async def chat_completions(
             )
 
         except Exception as e:
+            logger.exception(
+                "[gateway][adapter-error] provider=%s model=%s err=%r trace=%s",
+                adapter.provider_name, getattr(adapter, "model", "?"), e, ctx.trace_id,
+            )
             cb_plugin.record_failure(adapter.provider_name)
             failed_providers.add(adapter.provider_name)
             last_error = e
@@ -356,5 +371,12 @@ async def health() -> dict[str, str]:
 
 @router.get("/metrics")
 async def metrics() -> dict[str, Any]:
-    """Placeholder for Prometheus metrics."""
-    return {"status": "ok"}
+    """缓存与请求统计（cache hit/miss 计数）。"""
+    cache = build_cache_plugin()
+    out: dict[str, Any] = {"status": "ok", "cache": cache.stats()}
+    if _obs_plugin is not None:
+        out["requests"] = {
+            "total": _obs_plugin._request_count,
+            "errors": _obs_plugin._error_count,
+        }
+    return out

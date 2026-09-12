@@ -31,6 +31,7 @@ class ChatCompletionRequest(BaseModel):
     tools: list[dict[str, Any]] | None = None
     tool_choice: str | dict[str, Any] | None = None
     parallel_tool_calls: bool | None = None
+    cache: bool = True
 
     def effective_max_tokens(self) -> int | None:
         return self.max_completion_tokens if self.max_completion_tokens is not None else self.max_tokens

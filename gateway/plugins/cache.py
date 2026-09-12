@@ -58,6 +58,8 @@ class CachePlugin(Plugin):
         self._client: redis.Redis | Any | None = None
         self._prefix = "llm:cache:"
         self._degraded = False
+        self._hit = 0
+        self._miss = 0
 
     async def _get_client(self) -> redis.Redis | Any:
         if self._client is not None:
@@ -94,7 +96,8 @@ class CachePlugin(Plugin):
         self, ctx: RequestContext, request: ChatCompletionRequest
     ) -> ChatCompletionRequest | None:
         """Check cache. If hit, raise CacheHit to short-circuit."""
-        if request.stream:
+        if request.stream or not getattr(request, "cache", True):
+            # stream 或显式 cache=False：跳过缓存读取（不让陈旧坏响应命中）
             return request
 
         # 租户 + 模型维度隔离：避免跨项目/跨模型命中旧答案（缓存污染）
@@ -105,11 +108,22 @@ class CachePlugin(Plugin):
             client = await self._get_client()
             cached = await client.get(cache_key)
             if cached:
-                raise CacheHit(json.loads(cached))
+                payload = json.loads(cached)
+                choices = payload.get("choices") or []
+                if not choices or not ((choices[0].get("message") or {}).get("content")):
+                    # 残缺缓存（历史上误存的脏数据）：当未命中并删除，避免一直命中错误
+                    try:
+                        await client.delete(cache_key)
+                    except Exception:
+                        pass
+                else:
+                    self._hit += 1
+                    raise CacheHit(payload)
         except CacheHit:
             raise
         except Exception:
             pass
+        self._miss += 1
         return request
 
     async def post_response(
@@ -129,6 +143,15 @@ class CachePlugin(Plugin):
 
     async def on_error(self, ctx: RequestContext, error: Exception) -> None:
         pass
+
+    def stats(self) -> dict[str, Any]:
+        total = self._hit + self._miss
+        return {
+            "hits": self._hit,
+            "misses": self._miss,
+            "total": total,
+            "hit_rate": round(self._hit / total, 4) if total else 0.0,
+        }
 
     async def close(self) -> None:
         if self._client and not self._degraded:
